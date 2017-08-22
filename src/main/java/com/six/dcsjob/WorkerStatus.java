@@ -15,6 +15,12 @@ public enum WorkerStatus implements Serializable {
 	/**准备**/
 	READY(Worker.READY),
 	
+	/**初始化**/
+	INIT(Worker.INIT),
+	
+	/**完成初始化**/
+	INITED(Worker.INITED),
+	
 	/**开始**/
 	START(Worker.START),
 	/**已经开始**/

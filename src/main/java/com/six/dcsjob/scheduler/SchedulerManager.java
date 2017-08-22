@@ -7,13 +7,13 @@ import com.six.dcsjob.Job;
  * @date 2017年8月11日
  * @email 359852326@qq.com
  */
-public interface Scheduler {
+public interface SchedulerManager {
 	/**
 	 * 执行指定job
 	 * 
 	 * @param job
 	 */
-	void execute(Job job);
+	void execute(String jobName);
 
 	/**
 	 * 暂停指定job
@@ -41,14 +41,8 @@ public interface Scheduler {
 	 */
 	void stopAll();
 
-	/**
-	 * 指定job下的worker结束
-	 * 
-	 * @param jobName
-	 * @param workerName
-	 */
-	void end(String jobName, String workerName);
-
+	
+	void askEnd(String jobName);
 	/**
 	 * 定时调度指定job
 	 * 
@@ -61,7 +55,7 @@ public interface Scheduler {
 	 * 
 	 * @param jobName
 	 */
-	void unSchedule(String jobName);
+	void unschedule(String jobName);
 
 	/**
 	 * shutdown调度器

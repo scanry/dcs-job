@@ -16,6 +16,10 @@ import com.six.dcsjob.WorkerStatus;
 public interface Worker<T extends WorkSpaceData, R extends WorkerSnapshot>{
 
 	public static final String READY = "ready";// 初始状态为准备
+	
+	public static final String INIT = "init";// 初始化
+	
+	public static final String INITED = "inited";// 完成初始化
 
 	public static final String START = "start";// 开始
 
@@ -43,6 +47,10 @@ public interface Worker<T extends WorkSpaceData, R extends WorkerSnapshot>{
 
 	public static final String DESTROYED = "destroyed";// 已经销毁
 
+	/**
+	 *初始化
+	 */
+	void init(Job job);
 	/**
 	 * 获取 worker name
 	 * 

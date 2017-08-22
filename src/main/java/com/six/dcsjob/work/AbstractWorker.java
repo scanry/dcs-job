@@ -19,7 +19,7 @@ import com.six.dcsjob.WorkSpaceData;
 import com.six.dcsjob.WorkerErrMsg;
 import com.six.dcsjob.WorkerSnapshot;
 import com.six.dcsjob.WorkerStatus;
-import com.six.dcsjob.executor.Executor;
+import com.six.dcsjob.executor.ExecutorManager;
 import com.six.dcsjob.work.exception.WorkerException;
 import com.six.dcsjob.work.exception.WorkerInitException;
 import com.six.dcsjob.work.exception.WorkerOtherException;
@@ -54,7 +54,7 @@ public abstract class AbstractWorker<T extends WorkSpaceData, R extends WorkerSn
 	// 用来Condition.await() 和condition.signalAll();
 	private final Condition condition = reentrantLock.newCondition();
 	// worker的上级调度管理者
-	private Executor executorManager;
+	private ExecutorManager executorManager;
 	// worker的上级job
 	private Job job;
 	// 任务空间
@@ -71,25 +71,28 @@ public abstract class AbstractWorker<T extends WorkSpaceData, R extends WorkerSn
 
 	private List<WorkerErrMsg> errMsgs = new ArrayList<>();// job运行记录 异常集合
 
-	public AbstractWorker(Job job) {
-		this.job = job;
-	}
-
-	private void init() {
-		MDC.put("jobName", job.getName());
-		try {
-			/**获取执行器manager**/
-			this.executorManager = job.getParam(JobParameters.EXECUTOR_MANAGER);
-			/**获取记录导出器**/
-			this.recordReport = job.getParam(JobParameters.RECORD_REPORT);
-			/**获取job空间**/
-			this.jobSpace = job.getParam(JobParameters.JOB_SPACE);
-			/**获取worker运行快照**/
-			this.workerSnapshot = job.getParam(JobParameters.JOB_SPACE);
-			restTime = job.getRestTime() == 0 ? DEFAULT_REST_TIME : job.getRestTime();
-			initWorker();
-		} catch (Exception e) {
-			throw new WorkerInitException("job[" + getJob().getName() + "]'s work[" + getName() + "] init err", e);
+	@Override
+	public void init(Job job) {
+		if (compareAndSetState(WorkerStatus.READY, WorkerStatus.INIT)) {
+			// String workerName = "job[" + job.getName() +
+			// "]_"+jobSnapshotId+"_"+System.currentTimeMillis();
+			this.job = job;
+			MDC.put("jobName", job.getName());
+			try {
+				/** 获取执行器manager **/
+				this.executorManager = job.getParam(JobParameters.EXECUTOR_MANAGER);
+				/** 获取记录导出器 **/
+				this.recordReport = job.getParam(JobParameters.RECORD_REPORT);
+				/** 获取job空间 **/
+				this.jobSpace = job.getParam(JobParameters.JOB_SPACE);
+				/** 获取worker运行快照 **/
+				this.workerSnapshot = job.getParam(JobParameters.JOB_SPACE);
+				restTime = job.getRestTime() == 0 ? DEFAULT_REST_TIME : job.getRestTime();
+				initWorker();
+				getAndSetState(WorkerStatus.INITED);
+			} catch (Exception e) {
+				throw new WorkerInitException("job[" + getJob().getName() + "]'s work[" + getName() + "] init err", e);
+			}
 		}
 	}
 
@@ -140,7 +143,7 @@ public abstract class AbstractWorker<T extends WorkSpaceData, R extends WorkerSn
 		jobSpace.updateWorkerSnapshot(workerSnapshot);
 		log.info("start init:" + getName());
 		try {
-			init();
+			init(null);
 		} catch (WorkerException e) {
 			getAndSetState(WorkerStatus.STOP);
 			String errMsg = "job[" + getJob().getName() + "]'s work[" + getName() + "] init err";
@@ -372,9 +375,9 @@ public abstract class AbstractWorker<T extends WorkSpaceData, R extends WorkerSn
 	 * 通知工作线程恢复运行
 	 */
 	private void signalRun() {
-		if (getState() == WorkerStatus.STARTED || getState() == WorkerStatus.REST
-				|| getState() == WorkerStatus.STOP || getState() == WorkerStatus.STOPED
-				|| getState() == WorkerStatus.FINISH || getState() == WorkerStatus.FINISHED) {
+		if (getState() == WorkerStatus.STARTED || getState() == WorkerStatus.REST || getState() == WorkerStatus.STOP
+				|| getState() == WorkerStatus.STOPED || getState() == WorkerStatus.FINISH
+				|| getState() == WorkerStatus.FINISHED) {
 			reentrantLock.lock();
 			try {
 				if (getState() == WorkerStatus.STARTED || getState() == WorkerStatus.REST
@@ -454,10 +457,6 @@ public abstract class AbstractWorker<T extends WorkSpaceData, R extends WorkerSn
 	@Override
 	public boolean isRunning() {
 		return getState() == WorkerStatus.STARTED;
-	}
-
-	public Executor getExecutor() {
-		return executorManager;
 	}
 
 	@Override

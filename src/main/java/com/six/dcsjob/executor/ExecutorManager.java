@@ -7,14 +7,15 @@ import com.six.dcsjob.Job;
 * @date   2017年8月11日 
 * @email  359852326@qq.com 
 */
-public interface Executor {
+public interface ExecutorManager {
 
 	/**
 	 * 	执行指定job
 	 * @param job
 	 */
-	void execute(Job job);
+	void execute(Job job,String jobSnapshotId);
 
+	void rest(String jobName);
 	/**
 	 * 暂停指定job
 	 * @param jobName
@@ -33,6 +34,8 @@ public interface Executor {
 	 */
 	void stop(String jobName);
 	
+	void finish(String jobName);
+	
 	/**
 	 * 停掉所有运行job
 	 */
@@ -40,6 +43,7 @@ public interface Executor {
 	
 	void askEnd(String jobName,String workName);
 	
+	boolean isShutdown();
 	/**
 	 * shutdown调度器
 	 */
