@@ -83,7 +83,7 @@ public interface Worker<T extends WorkSpaceData, R extends WorkerSnapshot>{
 	/**
 	 * 开始方法 只有当 state== ready 时调用
 	 */
-	public void start();
+	public void start(Job job);
 
 	/**
 	 * 在运行状态下，没有处理数据事等待

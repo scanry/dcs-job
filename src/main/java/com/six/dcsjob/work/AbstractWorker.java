@@ -76,6 +76,7 @@ public abstract class AbstractWorker<T extends WorkSpaceData, R extends WorkerSn
 		if (compareAndSetState(WorkerStatus.READY, WorkerStatus.INIT)) {
 			// String workerName = "job[" + job.getName() +
 			// "]_"+jobSnapshotId+"_"+System.currentTimeMillis();
+			log.info("start init:" + getName());
 			this.job = job;
 			MDC.put("jobName", job.getName());
 			try {
@@ -90,6 +91,7 @@ public abstract class AbstractWorker<T extends WorkSpaceData, R extends WorkerSn
 				restTime = job.getRestTime() == 0 ? DEFAULT_REST_TIME : job.getRestTime();
 				initWorker();
 				getAndSetState(WorkerStatus.INITED);
+				log.info("end init:" + getName());
 			} catch (Exception e) {
 				throw new WorkerInitException("job[" + getJob().getName() + "]'s work[" + getName() + "] init err", e);
 			}
@@ -134,25 +136,33 @@ public abstract class AbstractWorker<T extends WorkSpaceData, R extends WorkerSn
 	/**
 	 * 工作流程处理中所有不可控异常都会设置为stop退出当前处理
 	 */
-	private final void work() {
+	private final void work(Job job) {
 		workThread = Thread.currentThread();
+		try {
+			init(job);
+		} catch (WorkerException e) {
+			getAndSetState(WorkerStatus.STOP);
+			log.error("", e);
+			doErr(e);
+		}
 		String nowTime = DateFormatUtils.format(System.currentTimeMillis(), DATE_FORMAT);
 		workerSnapshot.setStartTime(nowTime);
 		workerSnapshot.setEndTime(nowTime);
-		// worker业务处理循环前将workerSnapshot先保存，最后业务流程结束时需要再次更新
 		jobSpace.updateWorkerSnapshot(workerSnapshot);
-		log.info("start init:" + getName());
-		try {
-			init(null);
-		} catch (WorkerException e) {
-			getAndSetState(WorkerStatus.STOP);
-			String errMsg = "job[" + getJob().getName() + "]'s work[" + getName() + "] init err";
-			log.error(errMsg, e);
-			doErr(new WorkerInitException(errMsg, e));
+		if (compareAndSetState(WorkerStatus.INITED, WorkerStatus.STARTED)) {
+			doWork();
 		}
-		log.info("end init:" + getName());
-		log.info("start work:" + getName());
-		compareAndSetState(WorkerStatus.START, WorkerStatus.STARTED);
+		workerSnapshot.setEndTime(DateFormatUtils.format(System.currentTimeMillis(), DATE_FORMAT));
+		if (workerSnapshot.getTotalProcessCount() > 0) {
+			workerSnapshot
+					.setAvgProcessTime(workerSnapshot.getTotalProcessTime() / workerSnapshot.getTotalProcessCount());
+		}
+		reportErrMsg(true);
+		jobSpace.updateWorkerSnapshot(workerSnapshot);
+	}
+
+	private final void doWork() {
+		log.info("start run:" + getName());
 		while (true) {
 			try {
 				jobSpace.updateWorkerSnapshot(workerSnapshot);
@@ -202,15 +212,7 @@ public abstract class AbstractWorker<T extends WorkSpaceData, R extends WorkerSn
 				doErr(new WorkerOtherException(errMsg, e));
 			}
 		}
-
-		workerSnapshot.setEndTime(DateFormatUtils.format(System.currentTimeMillis(), DATE_FORMAT));
-		if (workerSnapshot.getTotalProcessCount() > 0) {
-			workerSnapshot
-					.setAvgProcessTime(workerSnapshot.getTotalProcessTime() / workerSnapshot.getTotalProcessCount());
-		}
-		reportErrMsg(true);
-		jobSpace.updateWorkerSnapshot(workerSnapshot);
-		log.info("end work:" + getName());
+		log.info("end run:" + getName());
 	}
 
 	/**
@@ -284,10 +286,9 @@ public abstract class AbstractWorker<T extends WorkSpaceData, R extends WorkerSn
 	}
 
 	@Override
-	public final void start() {
-		if (compareAndSetState(WorkerStatus.READY, WorkerStatus.START)) {
-			log.info("worker[" + getName() + "] will start");
-			work();
+	public final void start(Job job) {
+		if (compareAndSetState(WorkerStatus.READY, WorkerStatus.INIT)) {
+			work(job);
 		}
 	}
 
@@ -489,6 +490,7 @@ public abstract class AbstractWorker<T extends WorkSpaceData, R extends WorkerSn
 
 	@Override
 	public final void destroy() {
+		log.info("start destroy:" + getName());
 		getAndSetState(WorkerStatus.DESTROY);
 		if (null != jobSpace) {
 			try {
@@ -502,8 +504,8 @@ public abstract class AbstractWorker<T extends WorkSpaceData, R extends WorkerSn
 		} catch (Exception e) {
 			log.error("worker[" + getName() + "] insideDestroy", e);
 		}
-		MDC.remove("jobName");
-		log.info("destroy worker:" + getName());
 		getAndSetState(WorkerStatus.DESTROYED);
+		log.info("end destroy:" + getName());
+		MDC.remove("jobName");
 	}
 }

@@ -13,7 +13,6 @@ import com.google.common.collect.Interners;
 import com.six.dcsjob.Job;
 import com.six.dcsjob.work.AbstractWorkerPlugsManager;
 import com.six.dcsjob.work.Worker;
-import com.six.dcsjob.work.exception.WorkerInitException;
 import com.six.dcsjob.cache.WorkerRunningCache;
 
 /**
@@ -82,11 +81,8 @@ public class ExecutorManagerImpl implements ExecutorManager {
 		workerRunningCache.register(job.getName(), jobSnapshotId, worker);
 		workerParameterAssembling.setParameter(job);
 		try {
-			worker.init(job);
-			worker.start();
-		} catch (WorkerInitException e) {
-			log.error("init worker [" + workerName + "] err", e);
-		} catch (Exception e) {
+			worker.start(job);
+		}catch (Exception e) {
 			log.error("execute worker [" + workerName + "] err", e);
 		} finally {
 			workerThread.setName(systemThreadName);
