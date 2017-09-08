@@ -1,4 +1,7 @@
-package com.six.dcsjob;
+package com.six.dcsjob.space;
+
+import com.six.dcsjob.model.JobSnapshot;
+import com.six.dcsjob.model.WorkerSnapshot;
 
 /**
  * @author sixliu E-mail:359852326@qq.com

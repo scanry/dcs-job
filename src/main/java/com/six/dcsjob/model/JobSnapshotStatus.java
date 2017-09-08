@@ -1,4 +1,4 @@
-package com.six.dcsjob;
+package com.six.dcsjob.model;
 
 /**
  * @author 作者
@@ -19,8 +19,10 @@ public interface JobSnapshotStatus {
 	int EXECUTING = 4;
 	/*** 暂停 */
 	int SUSPEND = 5;
+	/*** 结束 */
+	int END=6;
 	/*** 停止 */
-	int STOP = 6;
+	int STOP = 7;
 	/*** 完成 */
-	int FINISHED = 7;
+	int FINISHED = 8;
 }

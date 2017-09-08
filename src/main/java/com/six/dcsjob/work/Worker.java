@@ -1,10 +1,10 @@
 package com.six.dcsjob.work;
 
-import com.six.dcsjob.Job;
-import com.six.dcsjob.JobSpace;
-import com.six.dcsjob.WorkSpaceData;
-import com.six.dcsjob.WorkerSnapshot;
-import com.six.dcsjob.WorkerStatus;
+import com.six.dcsjob.model.Job;
+import com.six.dcsjob.model.WorkerSnapshot;
+import com.six.dcsjob.model.WorkerStatus;
+import com.six.dcsjob.space.JobSpace;
+import com.six.dcsjob.space.WorkSpaceData;
 
 /**
  * @author six

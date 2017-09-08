@@ -1,4 +1,6 @@
-package com.six.dcsjob;
+package com.six.dcsjob.space;
+
+import com.six.dcsjob.model.Index;
 
 /**
  * @author 作者

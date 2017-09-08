@@ -1,38 +1,26 @@
 package com.six.dcsjob.scheduler;
 
 import java.util.Arrays;
+import java.util.Date;
 import java.util.List;
-import java.util.Properties;
 import java.util.concurrent.LinkedBlockingQueue;
 
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.lang3.time.DateFormatUtils;
-import org.quartz.CronScheduleBuilder;
-import org.quartz.JobBuilder;
-import org.quartz.JobDataMap;
-import org.quartz.JobDetail;
-import org.quartz.JobExecutionContext;
-import org.quartz.JobExecutionException;
-import org.quartz.JobKey;
-import org.quartz.Scheduler;
-import org.quartz.SchedulerException;
-import org.quartz.Trigger;
-import org.quartz.TriggerBuilder;
-import org.quartz.impl.StdSchedulerFactory;
+import org.apache.ignite.cluster.ClusterNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.google.common.collect.Interner;
 import com.google.common.collect.Interners;
-import com.six.dcsjob.Job;
-import com.six.dcsjob.JobSnapshot;
-import com.six.dcsjob.JobSnapshotStatus;
-import com.six.dcsnodeManager.Node;
-import com.six.dcsnodeManager.api.DcsNodeManager;
-import com.six.dcsnodeManager.impl.ZkDcsNodeManager;
-
+import com.six.dcsnodeManager.DcsNodeManager;
 import com.six.dcsjob.cache.JobRunningCache;
 import com.six.dcsjob.executor.ExecutorManager;
+import com.six.dcsjob.model.Job;
+import com.six.dcsjob.model.JobRelationship;
+import com.six.dcsjob.model.JobRunningContext;
+import com.six.dcsjob.model.JobSnapshot;
+import com.six.dcsjob.model.JobSnapshotStatus;
 
 /**
  * @author liusong
@@ -45,47 +33,46 @@ public class SchedulerManagerImpl implements SchedulerManager {
 
 	final static String DATE_FORMAT = "yyyy-MM-dd HH:mm:ss";
 
-	public static final String JOB_NAME_KEY = "jobName";
-
-	public static final String SCHEDULER_MANAGER_KEY = "scheduleManager";
+	final static String JOBSNAPSHOTID_DATE_FORMAT = "yyyyMMddHHmmss";
 
 	private DcsNodeManager dcsNodeManager;
 
-	private QueryJob queryJob;
+	private JobQuery jobQuery;
 
-	private LinkedBlockingQueue<Job> pendingExecuteQueue = new LinkedBlockingQueue<>();
+	private JobRelationshipQuery jobRelationshipQuery;
+
+	private LinkedBlockingQueue<JobRunningContext> pendingExecuteQueue = new LinkedBlockingQueue<>();
 
 	private JobRunningCache jobRunningCache;
 
-	private final static String schedulerGroup = "exCrawler";
-
-	private Scheduler scheduler;
+	private JobSnapshotReport jobSnapshotReport;
 
 	private Thread doJobThread;
 
 	private Interner<String> keyLock = Interners.<String>newWeakInterner();
 
-	public SchedulerManagerImpl(String appName, String clusterName, Node currentNode, long keepliveInterval,
-			String zkConnection, int nodeRpcServerThreads, int nodeRpcClientThreads, QueryJob queryJob) {
-		dcsNodeManager = new ZkDcsNodeManager(appName, clusterName, currentNode, keepliveInterval, zkConnection,
-				nodeRpcServerThreads, nodeRpcClientThreads);
-		dcsNodeManager.start();
-		this.queryJob = queryJob;
-		initScheduler();
+	public SchedulerManagerImpl(DcsNodeManager dcsNodeManager, JobRunningCache jobRunningCache, JobQuery jobQuery,
+			JobRelationshipQuery jobRelationshipQuery, JobSnapshotReport jobSnapshotReport) {
+		this.dcsNodeManager = dcsNodeManager;
+		this.jobRunningCache = jobRunningCache;
+		this.jobQuery = jobQuery;
+		this.jobRelationshipQuery = jobRelationshipQuery;
+		this.jobSnapshotReport = jobSnapshotReport;
 		initDoJobThread();
 	}
 
 	private void initDoJobThread() {
 		doJobThread = new Thread(() -> {
 			log.info("start Thread{loop-read-pendingExecuteQueue-thread}");
-			Job job = null;
+			JobRunningContext jobRunningContext = null;
 			while (true) {
 				try {
-					job = pendingExecuteQueue.take();
-					if (null != job) {
-						doExecute(job);
+					jobRunningContext = pendingExecuteQueue.take();
+					if (null != jobRunningContext) {
+						doExecute(jobRunningContext);
 					}
-				} catch (Exception e1) {
+				} catch (Exception e) {
+					log.error("", e);
 				}
 			}
 		}, "loop-read-pendingExecuteQueue-thread");
@@ -93,39 +80,33 @@ public class SchedulerManagerImpl implements SchedulerManager {
 		doJobThread.start();
 	}
 
-	private void initScheduler() {
-		Properties props = new Properties();
-		props.put("org.quartz.scheduler.instanceName", "DefaultQuartzScheduler");
-		props.put("org.quartz.scheduler.rmi.export", false);
-		props.put("org.quartz.scheduler.rmi.proxy", false);
-		props.put("org.quartz.scheduler.wrapJobExecutionInUserTransaction", false);
-		props.put("org.quartz.threadPool.class", "org.quartz.simpl.SimpleThreadPool");
-		props.put("org.quartz.threadPool.threadCount", "2");
-		props.put("org.quartz.threadPool.threadPriority", "5");
-		props.put("org.quartz.threadPool.threadsInheritContextClassLoaderOfInitializingThread", true);
-		props.put("org.quartz.jobStore.misfireThreshold", "60000");
-		try {
-			StdSchedulerFactory stdSchedulerFactory = new StdSchedulerFactory(props);
-			scheduler = stdSchedulerFactory.getScheduler();
-			scheduler.start();
-		} catch (SchedulerException e) {
-			log.error("start scheduler err");
-			System.exit(1);
-		}
-	}
-
 	/**
-	 * 本地执行 由手动执行和定时触发 调用
+	 * 本地执行 由手动执行和定时触发 调用 任务开始时候 开始时间和结束时间默认是一样的
 	 * 
 	 * @param job
 	 */
 	@Override
-	public void execute(String jobName) {
-		Job job = queryJob.getJob(jobName);
-		if (null != job && !pendingExecuteQueue.contains(job)) {
-			synchronized (keyLock.intern(jobName)) {
-				pendingExecuteQueue.add(job);
-				log.info("already submit job[" + jobName + "] to queue ");
+	public void execute(String triggerJobName, String jobName) {
+		if (StringUtils.isNotBlank(jobName)) {
+			Job job = jobQuery.get(jobName);
+			if (null != job) {
+				synchronized (keyLock.intern(jobName)) {
+					String jobSnapshotId = jobName + "_"
+							+ DateFormatUtils.format(System.currentTimeMillis(), JOBSNAPSHOTID_DATE_FORMAT);
+					JobSnapshot jobSnapshot = new JobSnapshot();
+					jobSnapshot.setId(jobSnapshotId);
+					jobSnapshot.setName(jobName);
+					jobSnapshot.setStartTime(DateFormatUtils.format(System.currentTimeMillis(), DATE_FORMAT));
+					jobSnapshot.setEndTime(DateFormatUtils.format(System.currentTimeMillis(), DATE_FORMAT));
+					jobSnapshot.setStatus(JobSnapshotStatus.PENDING_EXECUTED);
+					JobRunningContext jobRunningContext = new JobRunningContext();
+					jobRunningContext.setJobSnapshot(jobSnapshot);
+					jobRunningContext.setJob(job);
+					pendingExecuteQueue.add(jobRunningContext);
+					jobRunningCache.registerAndUpdate(jobSnapshot);
+					log.info("th job[" + jobName + "] is be trigger by " + triggerJobName
+							+ " and already submit to queue");
+				}
 			}
 		} else {
 			log.info("ready to execute job[" + jobName + "] is null");
@@ -133,112 +114,96 @@ public class SchedulerManagerImpl implements SchedulerManager {
 	}
 
 	/**
-	 * call工作节点执行任务
+	 * 处理任务执行
 	 * 
-	 * @param node
-	 *            工作节点
-	 * @param jobName
-	 *            任务name
+	 * @param job
 	 */
-	private void doExecute(Job job) {
-		// 判断任务是否在运行
-		if (!jobRunningCache.isRunning(job.getName())) {
-			log.info("master node execute job[" + job.getName() + "]");
-			// TODO 这里计算可执行资源时，需要进行资源隔离，避免并发导致同时分配
-			String designatedNodeName = job.getDesignatedNodeName();
-			int needNodes = job.getNeedNodes();
-			int needThreads = job.getThreads();
-			List<Node> freeNodes = getFreeNodes(designatedNodeName, needNodes, needThreads);
-			if (null != freeNodes && freeNodes.size() > 0) {
-				doExecute(job, freeNodes);
-				return;
-			} else {
-				log.error("there is no node to execute job[" + job.getName() + "]");
+	private void doExecute(JobRunningContext jobRunningContext) {
+		if (!jobRunningCache.isRunning(jobRunningContext.getJob().getName())) {
+			synchronized (keyLock.intern(jobRunningContext.getJob().getName())) {
+				if (!jobRunningCache.isRunning(jobRunningContext.getJob().getName())) {
+					// TODO 这里计算可执行资源时，需要进行资源隔离，避免并发导致同时分配
+					String designatedNodeName = jobRunningContext.getJob().getDesignatedNodeName();
+					List<ClusterNode> freeNodes = null;
+					if (StringUtils.isNotBlank(designatedNodeName)) {
+						ClusterNode designatedNode = dcsNodeManager.getNode(designatedNodeName);
+						freeNodes = Arrays.asList(designatedNode);
+					} else {
+						freeNodes = dcsNodeManager.getNodes();
+					}
+					if (null != freeNodes && freeNodes.size() > 0) {
+						doExecute(jobRunningContext.getJob(), jobRunningContext.getJobSnapshot(), freeNodes);
+						return;
+					} else {
+						log.info("there is no node to execute job[" + jobRunningContext.getJob().getName() + "]");
+					}
+				}
 			}
-		} else {
-			log.error("the job[" + job.getName() + "] is running");
 		}
+		log.error("the job[" + jobRunningContext.getJob().getName() + "] is running");
 	}
 
 	/**
-	 * 通知freeNodes 执行job
+	 * 任务调度器调度从节点执行任务 1.生成任务运行快照。 2.注册任务运行快照。 3.监听执行任务worker的启动事件。
+	 * 4.监听执行任务worker的结束事件。 5.rpc调用指定从节点执行任务
 	 * 
 	 * @param job
+	 *            执行的任务
 	 * @param freeNodes
+	 *            空闲节点
 	 */
-	private void doExecute(Job job, List<Node> freeNodes) {
-		String jobSnapshotId = "";
-		JobSnapshot jobSnapshot = new JobSnapshot(jobSnapshotId, job.getName());
-		// 任务开始时候 开始时间和结束时间默认是一样的
-		jobSnapshot.setStartTime(DateFormatUtils.format(System.currentTimeMillis(), DATE_FORMAT));
-		jobSnapshot.setEndTime(DateFormatUtils.format(System.currentTimeMillis(), DATE_FORMAT));
+	private void doExecute(Job job, JobSnapshot jobSnapshot, List<ClusterNode> freeNodes) {
 		jobSnapshot.setStatus(JobSnapshotStatus.INIT);
-		jobRunningCache.register(jobSnapshot);
-		ExecutorManager executorManager = null;
-		for (Node freeNode : freeNodes) {
+		jobRunningCache.registerAndUpdate(jobSnapshot);
+		jobRunningCache.listenWorkerStart(jobSnapshot, workerSnapshot -> {
+			doJobRelationship(jobSnapshot, JobRelationship.EXECUTE_TYPE_PARALLEL);
+			// TODO 这里可以监听执行任务的worker启动事件
+		});
+		jobRunningCache.listenWorkerEnd(jobSnapshot, workerSnapshot -> {
+			endjob(jobSnapshot);
+			if (JobSnapshotStatus.FINISHED == jobSnapshot.getStatus()) {
+				doJobRelationship(jobSnapshot, JobRelationship.EXECUTE_TYPE_SERIAL);
+			}
+		});
+		for (ClusterNode freeNode : freeNodes) {
 			try {
-				executorManager = dcsNodeManager.loolupService(freeNode, ExecutorManager.class, response -> {
-				});
-				executorManager.execute(job, jobSnapshotId);
-				log.info("already request worker node[" + freeNode.getName() + "] to execut the job[" + job.getName()
-						+ "]");
+				dcsNodeManager.loolupService(freeNode, ExecutorManager.class, null).execute(job, jobSnapshot.getId());
+				log.info("already request worker node[" + freeNode.id() + "] to execut the job[" + job.getName() + "]");
 			} catch (Exception e) {
-				log.error("this master node calls worker node[" + freeNode.getName() + "] to execut the job["
-						+ job.getName() + "]", e);
+				log.error("this master node calls worker node[" + freeNode.id() + "] to execut the job["
+						+ jobSnapshot.getName() + "]", e);
 			}
 		}
 	}
 
-	/**
-	 * 获取可执行job的空闲节点
-	 * 
-	 * @param job
-	 * @return
-	 */
-	private List<Node> getFreeNodes(String designatedNodeName, int needNodes, int needThreads) {
-		List<Node> freeNodes = null;
-		if (StringUtils.isNotBlank(designatedNodeName)) {
-			Node designatedNode = dcsNodeManager.getSlaveNode(designatedNodeName);
-			freeNodes = Arrays.asList(designatedNode);
-		} else {
-			freeNodes = dcsNodeManager.getNodes();
-		}
-		return freeNodes;
+	private void endjob(JobSnapshot jobSnapshot) {
+		jobSnapshot.setEndTime(DateFormatUtils.format(new Date(), DATE_FORMAT));
+		jobSnapshotReport.report(jobSnapshot);
+		jobRunningCache.unregister(jobSnapshot);
 	}
 
-	// private void doJobRelationship(JobSnapshot jobSnapshot, int executeType)
-	// {
-	// List<JobRelationship> jobRelationships =
-	// getJobRelationshipDao().query(jobSnapshot.getName());
-	// // TODO 这里并发触发的话，需要考虑 是否成功并发执行
-	// for (JobRelationship jobRelationship : jobRelationships) {
-	// if (executeType == jobRelationship.getExecuteType()) {
-	// execute(TriggerType.newDispatchTypeByJob(jobSnapshot.getName(),
-	// jobSnapshot.getId()),
-	// jobRelationship.getNextJobName());
-	// }
-	// }
-	// }
+	private void doJobRelationship(JobSnapshot jobSnapshot, int executeType) {
+		List<JobRelationship> jobRelationships = jobRelationshipQuery.get(jobSnapshot.getName());
+		// TODO 这里并发触发的话，需要考虑 是否成功并发执行
+		for (JobRelationship jobRelationship : jobRelationships) {
+			if (executeType == jobRelationship.getExecuteType()) {
+				execute(jobSnapshot.getName(), jobRelationship.getNextJobName());
+			}
+		}
+	}
 
 	@Override
 	public void suspend(String jobName) {
 		synchronized (keyLock.intern(jobName)) {
-			List<Node> nodes = jobRunningCache.runningJobNodes(jobName);
+			List<ClusterNode> nodes = jobRunningCache.runningJobNodes(jobName);
 			ExecutorManager executorManager = null;
-			for (Node node : nodes) {
+			for (ClusterNode node : nodes) {
 				try {
-					executorManager = dcsNodeManager.loolupService(node, ExecutorManager.class, result -> {
-						// if (result.isOk() && isSuspend(jobName)) {
-						// JobSnapshot jobSnapshot =
-						// getScheduleCache().getJobSnapshot(jobName);
-						// jobSnapshot.setStatus(JobSnapshotStatus.SUSPEND);
-						// getScheduleCache().updateJobSnapshot(jobSnapshot);
-						// }
-					});
+					executorManager = dcsNodeManager.loolupService(node, ExecutorManager.class);
 					executorManager.suspend(jobName);
-					log.info("already request worker node[" + node.getName() + "] to suspend the job[" + jobName + "]");
+					log.info("already request worker node[" + node.id() + "] to suspend the job[" + jobName + "]");
 				} catch (Exception e) {
-					log.error("get node[" + node.getName() + "]'s workerSchedulerManager err", e);
+					log.error("get node[" + node.id() + "]'s workerSchedulerManager err", e);
 				}
 			}
 		}
@@ -247,22 +212,15 @@ public class SchedulerManagerImpl implements SchedulerManager {
 	@Override
 	public void goOn(String jobName) {
 		synchronized (keyLock.intern(jobName)) {
-			List<Node> nodes = jobRunningCache.runningJobNodes(jobName);
+			List<ClusterNode> nodes = jobRunningCache.runningJobNodes(jobName);
 			ExecutorManager executorManager = null;
-			for (Node node : nodes) {
+			for (ClusterNode node : nodes) {
 				try {
-					executorManager = dcsNodeManager.loolupService(node, ExecutorManager.class, result -> {
-						// if (result.isOk() && isRunning(jobName)) {
-						// JobSnapshot jobSnapshot =
-						// getScheduleCache().getJobSnapshot(jobName);
-						// jobSnapshot.setStatus(JobSnapshotStatus.EXECUTING);
-						// getScheduleCache().updateJobSnapshot(jobSnapshot);
-						// }
-					});
+					executorManager = dcsNodeManager.loolupService(node, ExecutorManager.class);
 					executorManager.goOn(jobName);
-					log.info("already request worker node[" + node.getName() + "] to goOn the job[" + jobName + "]");
+					log.info("already request worker node[" + node.id() + "] to goOn the job[" + jobName + "]");
 				} catch (Exception e) {
-					log.error("get node[" + node.getName() + "]'s workerSchedulerManager err", e);
+					log.error("get node[" + node.id() + "]'s workerSchedulerManager err", e);
 				}
 			}
 		}
@@ -271,16 +229,15 @@ public class SchedulerManagerImpl implements SchedulerManager {
 	@Override
 	public void stop(String jobName) {
 		synchronized (keyLock.intern(jobName)) {
-			List<Node> nodes = jobRunningCache.runningJobNodes(jobName);
+			List<ClusterNode> nodes = jobRunningCache.runningJobNodes(jobName);
 			ExecutorManager executorManager = null;
-			for (Node node : nodes) {
+			for (ClusterNode node : nodes) {
 				try {
-					executorManager = dcsNodeManager.loolupService(node, ExecutorManager.class, result -> {
-					});
+					executorManager = dcsNodeManager.loolupService(node, ExecutorManager.class);
 					executorManager.stop(jobName);
-					log.info("already request worker node[" + node.getName() + "] to stop the job[" + jobName + "]");
+					log.info("already request worker node[" + node.id() + "] to stop the job[" + jobName + "]");
 				} catch (Exception e) {
-					log.error("get node[" + node.getName() + "]'s workerSchedulerManager err", e);
+					log.error("get node[" + node.id() + "]'s workerSchedulerManager err", e);
 				}
 			}
 		}
@@ -293,105 +250,26 @@ public class SchedulerManagerImpl implements SchedulerManager {
 
 	@Override
 	public synchronized void stopAll() {
-		List<Node> nodes = dcsNodeManager.getSlaveNodes();
+		List<ClusterNode> nodes = dcsNodeManager.getSlaveNodes();
 		ExecutorManager executorManager = null;
-		for (Node node : nodes) {
+		for (ClusterNode node : nodes) {
 			try {
-				executorManager = dcsNodeManager.loolupService(node, ExecutorManager.class, result -> {
-				});
+				executorManager = dcsNodeManager.loolupService(node, ExecutorManager.class);
 				executorManager.stopAll();
-				log.info("already request all node[" + node.getName() + "] to stopAll");
+				log.info("already request all node[" + node.id() + "] to stopAll");
 			} catch (Exception e) {
-				log.error("get node[" + node.getName() + "]'s workerSchedulerManager err", e);
-			}
-		}
-	}
-
-	public static class ScheduledJob implements org.quartz.Job {
-		@Override
-		public void execute(JobExecutionContext context) throws JobExecutionException {
-			SchedulerManager scheduleManager = (SchedulerManager) context.getJobDetail().getJobDataMap()
-					.get(SCHEDULER_MANAGER_KEY);
-			String jobName = (String) context.getJobDetail().getJobDataMap().get(JOB_NAME_KEY);
-			scheduleManager.execute(jobName);
-		}
-	}
-
-	/**
-	 * 向调度器注册job
-	 * 
-	 * @param job
-	 */
-	@Override
-	public void schedule(Job job) {
-		if (null != job) {
-			synchronized (scheduler) {
-				JobKey jobKey = new JobKey(job.getName(), schedulerGroup);
-				try {
-					boolean existed = scheduler.checkExists(jobKey);
-					if (existed) {
-						return;
-					}
-				} catch (SchedulerException e1) {
-					log.error("scheduler checkExists{" + job.getName() + "} err", e1);
-					return;
-				}
-				try {
-					boolean existed = scheduler.checkExists(jobKey);
-					if (existed) {
-						return;
-					}
-				} catch (SchedulerException e1) {
-					log.error("scheduler checkExists{" + job.getName() + "} err", e1);
-					return;
-				}
-				if (StringUtils.isNotBlank(job.getCronTrigger())) {
-					Trigger trigger = TriggerBuilder.newTrigger().withIdentity(job.getName(), schedulerGroup)
-							.withSchedule(CronScheduleBuilder.cronSchedule(job.getCronTrigger())).startNow().build();
-					JobBuilder jobBuilder = JobBuilder.newJob(ScheduledJob.class);
-					jobBuilder.withIdentity(jobKey);
-					JobDataMap newJobDataMap = new JobDataMap();
-					newJobDataMap.put(JOB_NAME_KEY, job.getName());
-					newJobDataMap.put(SCHEDULER_MANAGER_KEY, this);
-					jobBuilder.setJobData(newJobDataMap);
-					JobDetail jobDetail = jobBuilder.build();
-					try {
-						scheduler.scheduleJob(jobDetail, trigger);
-					} catch (SchedulerException e) {
-						log.error("scheduleJob err:" + job.getName());
-					}
-
-				}
-			}
-		}
-	}
-
-	@Override
-	public void unschedule(String jobName) {
-		if (StringUtils.isNotBlank(jobName)) {
-			synchronized (scheduler) {
-				try {
-					JobKey key = new JobKey(jobName, schedulerGroup);
-					scheduler.deleteJob(key);
-				} catch (SchedulerException e) {
-					log.error("deleteJobFromScheduled err", e);
-				}
+				log.error("get node[" + node.id() + "]'s workerSchedulerManager err", e);
 			}
 		}
 	}
 
 	@Override
 	public void shutdown() {
-		if (null != scheduler) {
-			try {
-				scheduler.shutdown();
-			} catch (SchedulerException e) {
-				log.error("scheduler shutdown err");
-			}
-		}
-		if (null != dcsNodeManager) {
-			dcsNodeManager.shutdown();
-		}
+	}
+
+	@Override
+	public JobRunningCache getJobRunningCache() {
+		return jobRunningCache;
 	}
 
 }

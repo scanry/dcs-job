@@ -1,4 +1,4 @@
-package com.six.dcsjob;
+package com.six.dcsjob.model;
 /** 
 * @author  作者 
 * @E-mail: 359852326@qq.com 

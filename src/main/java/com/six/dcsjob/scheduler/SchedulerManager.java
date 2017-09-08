@@ -1,6 +1,6 @@
 package com.six.dcsjob.scheduler;
 
-import com.six.dcsjob.Job;
+import com.six.dcsjob.cache.JobRunningCache;
 
 /**
  * @author liusong
@@ -13,7 +13,7 @@ public interface SchedulerManager {
 	 * 
 	 * @param job
 	 */
-	void execute(String jobName);
+	void execute(String triggerJobName,String jobName);
 
 	/**
 	 * 暂停指定job
@@ -43,20 +43,8 @@ public interface SchedulerManager {
 
 	
 	void askEnd(String jobName);
-	/**
-	 * 定时调度指定job
-	 * 
-	 * @param job
-	 */
-	void schedule(Job job);
-
-	/**
-	 * 取消定时调度指定job
-	 * 
-	 * @param jobName
-	 */
-	void unschedule(String jobName);
-
+	
+	JobRunningCache getJobRunningCache();
 	/**
 	 * shutdown调度器
 	 */

@@ -1,9 +1,13 @@
 package com.six.dcsjob.cache;
 
 import java.util.List;
+import java.util.Map;
 
-import com.six.dcsjob.JobSnapshot;
-import com.six.dcsnodeManager.Node;
+import org.apache.ignite.cluster.ClusterNode;
+
+import com.six.dcsjob.model.JobSnapshot;
+import com.six.dcsjob.model.WorkerSnapshot;
+import com.six.dcsjob.work.Worker;
 
 /**
  * @author liusong
@@ -13,8 +17,13 @@ import com.six.dcsnodeManager.Node;
 public interface JobRunningCache {
 
 	@FunctionalInterface
-	public interface ListenProcess{
-		void process();
+	public interface ListenStartProcess{
+		void process(WorkerSnapshot workerSnapshot);
+	}
+	
+	@FunctionalInterface
+	public interface ListenEndProcess{
+		void process(WorkerSnapshot workerSnapshot);
 	}
 	
 	/**
@@ -23,11 +32,78 @@ public interface JobRunningCache {
 	 */
 	boolean isRunning(String jobName);
 	
-	List<Node> runningJobNodes(String jobName);
+	/**
+	 * 获取运行job的节点集合
+	 * @param jobName
+	 * @return
+	 */
+	List<ClusterNode> runningJobNodes(String jobName);
 	
-	void register(JobSnapshot jobSnapshot);
+	/**
+	 * 获取job的运行快照
+	 * @param jobName
+	 * @param jobSnapshotId
+	 * @return
+	 */
+	JobSnapshot getJobSnapshot(String jobName, String jobSnapshotId);
 	
-	void listenJobIsEnd(String jobName, String jobSnapshotId,ListenProcess listenProcess);
+	/**
+	 * 注册job运行快照，并监听结束事件
+	 * @param jobSnapshot
+	 * @param listenProcess
+	 */
+	void registerAndUpdate(JobSnapshot jobSnapshot);
+	
+	/**
+	 * 移除注册
+	 * @param jobName
+	 * @param jobSnapshotId
+	 */
+	void unregister(JobSnapshot jobSnapshot);
+	
+	/**
+	 * 监听执行任务的worker启动事件
+	 * @param jobSnapshot
+	 * @param listenProcess
+	 */
+	void listenWorkerStart(JobSnapshot jobSnapshot,ListenStartProcess listenProcess);
+	
+	/**
+	 * 监听执行任务的worker启动事件
+	 * @param jobSnapshot
+	 * @param listenProcess
+	 */
+	void listenWorkerEnd(JobSnapshot jobSnapshot,ListenEndProcess listenProcess);
+	
+	
+	/**
+	 * 获取本地所有运行的worker
+	 * @return
+	 */
+	Map<String, Map<String, Worker<?, ?>>> getLocalAllWorkers();
 
+	/**
+	 * 获取本地指定job所有运行的worker
+	 * @return
+	 */
+	Map<String, Worker<?, ?>> getLocalWorkers(String jobName);
+
+	/**
+	 * 注册指定任务运行额worker
+	 * @return
+	 */
+	void registerAndUpdate(String jobName, String jobSnapshotId, Worker<?, ?> worker);
+	
+	/**
+	 * 取消注册指定任务运行额worker
+	 * @return
+	 */
+	void unregister(String jobName, String jobSnapshotId, Worker<?, ?> worker);
+	
+	/**
+	 * 判断本地worker是否全部结束
+	 * @return
+	 */
+	boolean localWorkersIsEnd();
 	
 }

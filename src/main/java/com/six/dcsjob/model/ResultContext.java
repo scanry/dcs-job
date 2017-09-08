@@ -1,4 +1,4 @@
-package com.six.dcsjob;
+package com.six.dcsjob.model;
 
 import java.util.ArrayList;
 import java.util.HashMap;

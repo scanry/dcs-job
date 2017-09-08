@@ -2,7 +2,7 @@ package com.six.dcsjob.work;
 
 import java.util.List;
 
-import com.six.dcsjob.WorkerErrMsg;
+import com.six.dcsjob.model.WorkerErrMsg;
 
 /**   
 * @author liusong  
